@@ -1,0 +1,16 @@
+# Автозаполнение: 4 акустические, 4 электрические и 4 бас-гитары
+# A;бренд;струны;группа;материал;цвет канта;размер;цвет корпуса;материал грифа;материал струн
+A;Yamaha;6;Acoustic;Spruce;Ivory;41.0;Natural;Maple;Nylon
+A;Fender;6;Acoustic;Mahogany;Black;40.0;Sunburst;Rosewood;Steel
+A;Martin;6;Acoustic;Rosewood;White;42.0;Natural;Mahogany;Bronze
+A;Cort;12;Acoustic;Maple;Brown;41.5;Black;Pau Ferro;Steel
+# E;бренд;струны;группа;материал;мощность;заряд;звукосниматели
+E;Ibanez;6;Electric;Basswood;120.0;95.0;2
+E;Gibson;6;Electric;Mahogany;150.0;88.0;3
+E;Jackson;7;Electric;Alder;100.0;76.0;2
+E;ESP;6;Electric;Maple;130.0;100.0;2
+# B;бренд;количество;группа;материал;мощность;заряд;струны
+B;Fender;1;Bass;Alder;80.0;92.0;4
+B;Ibanez;1;Bass;Mahogany;90.0;85.0;5
+B;Warwick;1;Bass;Ash;110.0;79.0;5
+B;Music Man;1;Bass;Maple;100.0;100.0;4
