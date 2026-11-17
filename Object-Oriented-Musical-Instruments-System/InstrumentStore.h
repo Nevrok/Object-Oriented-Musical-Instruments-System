@@ -1,31 +1,32 @@
 #pragma once
-#include <vector>
+#include <filesystem>
+#include <memory>
 #include <string>
+#include <vector>
 #include "StringInstruments.h"
-using namespace std;
 
 class InstrumentStore {
-private:
-    vector<StringInstruments*> mInstruments; // Коллекция инструментов
-    int mCapacity;                           // Максимальная вместимость
+    std::vector<std::unique_ptr<StringInstruments>> mInstruments;
+    int mCapacity;
+
+    bool HasDuplicate(const StringInstruments& instr, const std::string& brand) const;
 
 public:
     InstrumentStore(int capacity = 10);
-    ~InstrumentStore();
 
-    // CRUD (Создание, чтение, обновление, удаление)
-    void AddInstrument(StringInstruments* instr);    // Добавить инструмент
-    void RemoveInstrument(int index);                // Удалить по индексу
-    void Clear();                                    // Очистить всё
+    bool AddInstrument(std::unique_ptr<StringInstruments> instr);
+    bool RenameInstrument(StringInstruments& instr, const std::string& brand);
+    std::unique_ptr<StringInstruments> TakeInstrument(int index);
+    void RemoveInstrument(int index);
+    void Clear();
 
-    // Запросы
-    void              PrintAll()   const;             // Вывести все инструменты
-    int               GetCount()   const { return (int)mInstruments.size(); } // Текущее количество
-    int               GetCapacity()const { return mCapacity; }               // Вместимость
-    StringInstruments* GetAt(int index) const;        // Получить по индексу
-    StringInstruments* FindByBrend(const string& brand) const; // Найти по бренду
+    void PrintAll() const;
+    int GetCount() const { return static_cast<int>(mInstruments.size()); }
+    int GetCapacity() const { return mCapacity; }
+    StringInstruments* GetAt(int index) const;
+    StringInstruments* FindByBrend(const std::string& brand) const;
 
-    // Сохранение/загрузка
-    void SaveToFile(const string& filename) const;   // Сохранить в файл
-    void LoadFromFile(const string& filename);       // Загрузить из файла
+    void SaveToFile(const std::filesystem::path& filename) const;
+    void LoadFromFile(const std::filesystem::path& filename);
+    int LoadDefaults(const std::filesystem::path& filename);
 };

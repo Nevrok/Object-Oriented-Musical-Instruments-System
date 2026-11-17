@@ -1,61 +1,15 @@
-#define NOMINMAX    
-#define WIN32_LEAN_AND_MEAN
 #include "BassGuitar.h"
-#include "ElectricGuitar.h"
 #include "Localization.h"
-#include <iostream>
-#include <iomanip>
+#include "SoundPlayer.h"
+#include <algorithm>
 #include <chrono>
-#include <thread>
 #include <conio.h>
-#include <windows.h>
-#include <mmsystem.h>
-#include <io.h>
-#include <fcntl.h>
-#pragma comment(lib, "winmm.lib")
+#include <iomanip>
+#include <thread>
+
 using namespace std;
 using namespace chrono;
 using namespace this_thread;
-
-// Воспроизведение MP3 файла
-static void playSound(const wchar_t* filename) {
-    // Проверяем существование файла
-    FILE* file = nullptr;
-    errno_t ferr = _wfopen_s(&file, filename, L"rb");
-    if (ferr != 0 || !file) {
-        wprintf(L"Warning: Sound file not found: %s\n", filename);
-        return;
-    }
-    fclose(file);
-    wchar_t command[512];
-
-    swprintf(
-        command,
-        sizeof(command) / sizeof(wchar_t),
-        L"open \"%s\" type mpegvideo alias sound",
-        filename
-    );
-
-    MCIERROR error = mciSendStringW(command, NULL, 0, NULL);
-    if (error) {
-        wchar_t errorText[256];
-        mciGetErrorStringW(error, errorText, 256);
-        wprintf(L"MCI Error: %s\n", errorText);
-        return;
-    }
-
-
-    error = mciSendStringW(L"play sound notify", NULL, 0, NULL);
-    if (error) {
-        wprintf(L"MCI Play Error: %d\n", error);
-    }
-}
-
-// Остановка воспроизведения
-static void stopSound() {
-    mciSendStringW(L"stop sound", NULL, 0, NULL);
-    mciSendStringW(L"close sound", NULL, 0, NULL);
-}
 
 // Конструктор по умолчанию
 BassGuitar::BassGuitar()
@@ -79,7 +33,8 @@ void BassGuitar::Play() {
         << t.type_bass << t.msg_press_any_key << endl;
 
     // Начинаем воспроизведение звука бас—гитары
-    playSound(L"bassguitarsound.mp3");
+    SoundPlayer sound;
+    sound.Play(L"bassguitarsound.mp3");
 
     auto start = steady_clock::now();
     float initialBattery = mBatteryLevel;
@@ -88,13 +43,11 @@ void BassGuitar::Play() {
     while (!_kbhit()) {
         sleep_for(milliseconds(50));
         auto current = steady_clock::now();
-        float ms = duration_cast<milliseconds>(current - start).count();
+        float elapsed = duration<float>(current - start).count();
+        float drain = (mPower / 10.0f) * elapsed;
+        mBatteryLevel = max(0.0f, initialBattery - drain);
 
-        float drain = (mPower / 10.0f) * (ms / 1000.0f);
-        mBatteryLevel = initialBattery - drain;
-
-        if (mBatteryLevel < 0.0f) mBatteryLevel = 0.0f;
-        int sec = static_cast<int>(ms / 1000.0f);
+        int sec = static_cast<int>(elapsed);
         if (sec > lastSeconds) {
             lastSeconds = sec;
             cout << t.msg_playing_battery << fixed << setprecision(1) << mBatteryLevel << "%\n";
@@ -102,14 +55,14 @@ void BassGuitar::Play() {
 
         if (mBatteryLevel <= 0.0f) {
             cout << t.msg_battery_died;
-            stopSound();
+            sound.Stop();
             return;
         }
     }
     _getch(); // очистка буфера
 
     // Останавливаем воспроизведение при выходе
-    stopSound();
+    sound.Stop();
     cout << t.msg_finished_battery << fixed << setprecision(1) << mBatteryLevel << "%.\n";
 }
 
@@ -151,14 +104,11 @@ string BassGuitar::GetTypeName() const {
 }
 
 void BassGuitar::DecreaseStringCount() {
-    if (mStringCount > 1) {
-        mStringCount--;
-    }
-
-    if (mStringCount > 1) {
-        cout << Locale::get().msg_string_broke << mStringCount << "\n";
+    if (mStringCount <= 1) {
+        cout << Locale::get().msg_under_one_string << "\n";
         return;
     }
 
-    cout << Locale::get().msg_under_one_string << "\n";
+    --mStringCount;
+    cout << Locale::get().msg_string_broke << mStringCount << "\n";
 }

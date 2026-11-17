@@ -1,63 +1,15 @@
-#define NOMINMAX    
-#define WIN32_LEAN_AND_MEAN
 #include "AcousticGuitar.h"
 #include "Localization.h"
-#include <iostream>
-#include <iomanip>
+#include "SoundPlayer.h"
+#include <algorithm>
 #include <chrono>
-#include <thread>
 #include <conio.h>
-#include <windows.h>
-#include <mmsystem.h>
-#include <io.h>
-#include <fcntl.h>
-#include <cstdio>
-#include <errno.h>
-#pragma comment(lib, "winmm.lib")
+#include <iomanip>
+#include <thread>
+
 using namespace std;
 using namespace chrono;
 using namespace this_thread;
-
-// Воспроизведение MP3 файла
-static void playSound(const wchar_t* filename) {
-    // Проверяем существование файла
-    FILE* file = nullptr;
-    errno_t ferr = _wfopen_s(&file, filename, L"rb");
-    if (ferr != 0 || !file) {
-        wprintf(L"Warning: Sound file not found: %s\n", filename);
-        return;
-    }
-    fclose(file);
-
-    wchar_t command[512];
-
-    swprintf(
-        command,
-        sizeof(command) / sizeof(wchar_t),
-        L"open \"%s\" type mpegvideo alias sound",
-        filename
-    );
-
-    MCIERROR error = mciSendStringW(command, NULL, 0, NULL);
-    if (error) {
-        wchar_t errorText[256];
-        mciGetErrorStringW(error, errorText, 256);
-        wprintf(L"MCI Error: %s\n", errorText);
-        return;
-    }
-
-
-    error = mciSendStringW(L"play sound notify", NULL, 0, NULL);
-    if (error) {
-        wprintf(L"MCI Play Error: %d\n", error);
-    }
-}
-
-// Остановка воспроизведения
-static void stopSound() {
-    mciSendStringW(L"stop sound", NULL, 0, NULL);
-    mciSendStringW(L"close sound", NULL, 0, NULL);
-}
 
 // Конструктор по умолчанию
 AcousticGuitar::AcousticGuitar()
@@ -85,7 +37,8 @@ void AcousticGuitar::Play() {
     cout << t.msg_press_exclaim_to_break << endl;
 
     // Начинаем воспроизведение звука акустической гитары
-    playSound(L"acousticguitarsound.mp3");
+    SoundPlayer sound;
+    sound.Play(L"acousticguitarsound.mp3");
 
     auto lastPing = steady_clock::now();
     while (true) {
@@ -95,20 +48,29 @@ void AcousticGuitar::Play() {
                 // Рвем струну по нажатию '!'
                 if (mCount > 0) {
                     // Останавливаем основной звук и воспроизводим звук разрыва струны
-                    stopSound();
-                    playSound(L"brokestringsound.mp3");
-                    mCount--;
+                    sound.Stop();
+                    bool played = sound.Play(L"brokestringsound.mp3");
+                    !(*this);
                     cout << t.msg_string_broke << mCount << "\n";
-                    sleep_for(milliseconds(4000)); // Даем звук разрыва проиграться
+                    if (played) {
+                        const auto end = steady_clock::now() + seconds(4);
+                        while (steady_clock::now() < end && !_kbhit()) {
+                            sleep_for(milliseconds(50));
+                        }
+                        if (_kbhit()) {
+                            _getch();
+                            break;
+                        }
+                    }
 
                     if (mCount <= 0) {
                         cout << t.msg_cannot_play;
-                        stopSound();
+                        sound.Stop();
                         return;
                     }
-                    stopSound();
+                    sound.Stop();
                     // Начинаем игру заново
-                    playSound(L"acousticguitarsound.mp3");
+                    sound.Play(L"acousticguitarsound.mp3");
                 }
             }
             else {
@@ -125,7 +87,7 @@ void AcousticGuitar::Play() {
         sleep_for(milliseconds(50));
     }
     // Останавливаем воспроизведение при выходе
-    stopSound();
+    sound.Stop();
     cout << t.msg_finished_playing;
 }
 // Метод SetUp() — настройка акустической гитары

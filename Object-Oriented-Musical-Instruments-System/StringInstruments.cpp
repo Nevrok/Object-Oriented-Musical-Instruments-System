@@ -1,6 +1,6 @@
 #include "StringInstruments.h"
 #include "Localization.h"
-#include <iomanip>
+#include <limits>
 
 // Инициализация статического члена
 int StringInstruments::mObjectCount = 0;
@@ -16,6 +16,9 @@ StringInstruments::StringInstruments(string brend, int count, string group, stri
     : mBrend(brend), mCount(count), mGroup(group), mMaterial(material) {
     mObjectCount++;
 }
+
+StringInstruments::StringInstruments(const StringInstruments& other)
+    : StringInstruments(other.mBrend, other.mCount, other.mGroup, other.mMaterial) {}
 
 // Деструктор
 StringInstruments::~StringInstruments() {
@@ -59,7 +62,7 @@ string StringInstruments::GetTypeName() const {
 // Унарный оператор ++ для увеличения количества струн
 // Увеличивает количество струн на 1
 StringInstruments& StringInstruments::operator++() {
-    mCount++;
+    if (mCount < numeric_limits<int>::max()) ++mCount;
     return *this;
 }
 

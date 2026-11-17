@@ -1,186 +1,273 @@
+#define NOMINMAX
+#define WIN32_LEAN_AND_MEAN
 #include "InstrumentStore.h"
 #include "Localization.h"
 #include "AcousticGuitar.h"
 #include "BassGuitar.h"
 #include "ElectricGuitar.h"
-#include <iostream>
+#include <charconv>
+#include <cmath>
 #include <fstream>
-using namespace std;
+#include <iomanip>
+#include <limits>
+#include <locale>
+#include <stdexcept>
+#include <string_view>
+#include <system_error>
+#include <typeinfo>
+#include <windows.h>
 
-// Статические константы для идентификации типов при сохранении/загрузке
-static const string TAG_ACOUSTIC = "ACOUSTIC";
-static const string TAG_ELECTRIC = "ELECTRIC";
-static const string TAG_BASS = "BASS";
+namespace {
 
-// Конструктор с указанием вместимости
+bool IsBlank(const string& value) {
+    return value.find_first_not_of(" \t\r\n") == string::npos;
+}
+
+template<class Number>
+Number ParseNumber(const string& text) {
+    Number value{};
+    const auto end = text.data() + text.size();
+    const auto result = from_chars(text.data(), end, value);
+    if (result.ec != errc{} || result.ptr != end || !isfinite(value) || value < 0) {
+        throw invalid_argument(Locale::get().msg_invalid_data);
+    }
+    return value;
+}
+
+size_t FieldCount(string_view tag) {
+    if (tag == "ACOUSTIC") return 10;
+    if (tag == "BASS" || tag == "ELECTRIC") return 8;
+    if (tag == "GENERIC") return 5;
+    throw invalid_argument(Locale::get().msg_invalid_data);
+}
+
+unique_ptr<StringInstruments> ParseInstrument(const vector<string>& fields) {
+    const auto& tag = fields.at(0);
+    if (fields.size() != FieldCount(tag) ||
+        IsBlank(fields[1]) || IsBlank(fields[3]) || IsBlank(fields[4])) {
+        throw invalid_argument(Locale::get().msg_invalid_data);
+    }
+    const int count = ParseNumber<int>(fields[2]);
+    if (tag == "ACOUSTIC") {
+        const float size = ParseNumber<float>(fields[6]);
+        if (size <= 0 || IsBlank(fields[5]) || IsBlank(fields[7]) ||
+            IsBlank(fields[8]) || IsBlank(fields[9])) {
+            throw invalid_argument(Locale::get().msg_invalid_data);
+        }
+        return make_unique<AcousticGuitar>(fields[1], count, fields[3], fields[4],
+            fields[5], size, fields[7], fields[8], fields[9]);
+    }
+    if (tag == "GENERIC") {
+        return make_unique<StringInstruments>(fields[1], count, fields[3], fields[4]);
+    }
+
+    const float power = ParseNumber<float>(fields[5]);
+    const float battery = ParseNumber<float>(fields[6]);
+    const int extra = ParseNumber<int>(fields[7]);
+    if (power <= 0 || battery > 100 || (tag == "BASS" && extra == 0)) {
+        throw invalid_argument(Locale::get().msg_invalid_data);
+    }
+    if (tag == "BASS") {
+        return make_unique<BassGuitar>(fields[1], count, fields[3], fields[4], power, battery, extra);
+    }
+    return make_unique<ElectricGuitar>(fields[1], count, fields[3], fields[4], power, battery, extra);
+}
+
+void StripBom(string& line) {
+    if (line.starts_with("\xEF\xBB\xBF")) line.erase(0, 3);
+}
+
+string ReadField(istream& in) {
+    string value;
+    if (!getline(in, value)) throw runtime_error(Locale::get().msg_invalid_data);
+    return value;
+}
+
+void WriteInstrument(ostream& out, const StringInstruments& instr) {
+    auto* acoustic = dynamic_cast<const AcousticGuitar*>(&instr);
+    auto* bass = dynamic_cast<const BassGuitar*>(&instr);
+    auto* electric = dynamic_cast<const ElectricGuitar*>(&instr);
+    const char* tag = acoustic ? "ACOUSTIC" : bass ? "BASS" : electric ? "ELECTRIC" : "GENERIC";
+
+    out << tag << '\n' << instr.GetBrend() << '\n' << instr.GetCount() << '\n'
+        << instr.GetGroup() << '\n' << instr.GetMaterial() << '\n';
+    if (acoustic) {
+        out << acoustic->GetColorKant() << '\n' << acoustic->GetSize() << '\n'
+            << acoustic->GetColorKorpus() << '\n' << acoustic->GetMatGrif() << '\n'
+            << acoustic->GetMatString() << '\n';
+    } else if (bass) {
+        out << bass->GetPower() << '\n' << bass->GetBattery() << '\n'
+            << bass->GetStringCount() << '\n';
+    } else if (electric) {
+        out << electric->GetPower() << '\n' << electric->GetBattery() << '\n'
+            << electric->GetPickupCount() << '\n';
+    }
+}
+
+} // namespace
+
 InstrumentStore::InstrumentStore(int capacity) : mCapacity(capacity) {}
 
-// Деструктор — очищает все инструменты
-InstrumentStore::~InstrumentStore() {
-    Clear();
-}
-
-// Добавление инструмента в магазин
-void InstrumentStore::AddInstrument(StringInstruments* instr) {
-    const auto& t = Locale::get();
-    if (!instr) {
-        cout << t.msg_invalid << " nullptr instrument\n";
-        return;
-    }
-
-    if ((int)mInstruments.size() < mCapacity) {
-        // Проверка на дубликаты по бренду и типу
-        for (auto* existing : mInstruments) {
-            if (existing && existing->GetBrend() == instr->GetBrend() &&
-                existing->GetTypeName() == instr->GetTypeName()) {
-                cout << t.msg_invalid << " " << t.lbl_brand << " " << instr->GetBrend()
-                    << " (" << instr->GetTypeName() << ") " << "already exists\n";
-                delete instr;
-                return;
-            }
+bool InstrumentStore::HasDuplicate(const StringInstruments& instr, const string& brand) const {
+    for (const auto& existing : mInstruments) {
+        const auto& item = *existing;
+        if (&item != &instr && typeid(item) == typeid(instr) && item.GetBrend() == brand) {
+            return true;
         }
-        mInstruments.push_back(instr);
     }
-    else {
-        cout << t.msg_store_full << endl;
-        delete instr; // Удаляем объект, если не удалось добавить
-    }
+    return false;
 }
 
-// Удаление инструмента по индексу
+bool InstrumentStore::AddInstrument(unique_ptr<StringInstruments> instr) {
+    const auto& t = Locale::get();
+    if (!instr) return false;
+    if (GetCount() >= mCapacity) {
+        cout << t.msg_store_full << '\n';
+        return false;
+    }
+    if (HasDuplicate(*instr, instr->GetBrend())) {
+        cout << t.msg_duplicate << '\n';
+        return false;
+    }
+    mInstruments.push_back(move(instr));
+    return true;
+}
+
+bool InstrumentStore::RenameInstrument(StringInstruments& instr, const string& brand) {
+    if (HasDuplicate(instr, brand)) {
+        cout << Locale::get().msg_duplicate << '\n';
+        return false;
+    }
+    instr.SetBrend(brand);
+    return true;
+}
+
+unique_ptr<StringInstruments> InstrumentStore::TakeInstrument(int index) {
+    if (index < 0 || index >= GetCount()) return {};
+    auto position = mInstruments.begin() + index;
+    auto instrument = move(*position);
+    mInstruments.erase(position);
+    return instrument;
+}
+
 void InstrumentStore::RemoveInstrument(int index) {
-    if (index >= 0 && index < (int)mInstruments.size()) {
-        delete mInstruments[index];
-        mInstruments.erase(mInstruments.begin() + index);
-    }
+    TakeInstrument(index);
 }
 
-// Получение инструмента по индексу
 StringInstruments* InstrumentStore::GetAt(int index) const {
-    if (index >= 0 && index < (int)mInstruments.size())
-        return mInstruments[index];
-    return nullptr;
+    return index >= 0 && index < GetCount() ? mInstruments[index].get() : nullptr;
 }
 
-// Вывод всех инструментов в консоль
 void InstrumentStore::PrintAll() const {
     const auto& t = Locale::get();
     if (mInstruments.empty()) {
-        cout << t.msg_store_empty << endl;
+        cout << t.msg_store_empty << '\n';
         return;
     }
-    for (int i = 0; i < (int)mInstruments.size(); ++i) {
-        cout << t.instr_header << (i + 1) << " ———" << endl;
+    for (int i = 0; i < GetCount(); ++i) {
+        cout << t.instr_header << (i + 1) << " ———\n";
         mInstruments[i]->Print();
-        cout << t.separator << endl;
+        cout << t.separator << '\n';
     }
 }
 
-// Сохранение всех инструментов в файл
-void InstrumentStore::SaveToFile(const string& filename) const {
-    ofstream out(filename);
-    if (!out) return;
-
-    out << mInstruments.size() << "\n";
-    for (auto* instr : mInstruments) {
-        string tag;
-        if (dynamic_cast<AcousticGuitar*>(instr)) tag = TAG_ACOUSTIC;
-        else if (dynamic_cast<BassGuitar*>    (instr)) tag = TAG_BASS;
-        else if (dynamic_cast<ElectricGuitar*>(instr)) tag = TAG_ELECTRIC;
-        else                                            tag = "GENERIC";
-
-        out << tag << "\n";
-        out << instr->GetBrend() << "\n";
-        out << instr->GetCount() << "\n";
-        out << instr->GetGroup() << "\n";
-        out << instr->GetMaterial() << "\n";
-
-        // Поля, специфичные для подклассов
-        if (auto* ag = dynamic_cast<AcousticGuitar*>(instr)) {
-            out << ag->GetColorKant() << "\n";
-            out << ag->GetSize() << "\n";
-            out << ag->GetColorKorpus() << "\n";
-            out << ag->GetMatGrif() << "\n";
-            out << ag->GetMatString() << "\n";
-        }
-        else if (auto* bg = dynamic_cast<BassGuitar*>(instr)) {
-            out << bg->GetPower() << "\n";
-            out << bg->GetBattery() << "\n";
-            out << bg->GetStringCount() << "\n";
-        }
-        else if (auto* eg = dynamic_cast<ElectricGuitar*>(instr)) {
-            out << eg->GetPower() << "\n";
-            out << eg->GetBattery() << "\n";
-            out << eg->GetPickupCount() << "\n";
-        }
+void InstrumentStore::SaveToFile(const filesystem::path& filename) const {
+    const auto target = filesystem::absolute(filename);
+    wchar_t temporary[MAX_PATH]{};
+    if (!GetTempFileNameW(target.parent_path().c_str(), L"gtr", 0, temporary)) {
+        throw runtime_error(Locale::get().msg_file_write_failed);
     }
-    out.close();
+    try {
+        ofstream out{filesystem::path(temporary)};
+        out.imbue(locale::classic());
+        out << setprecision(numeric_limits<float>::max_digits10);
+        out << mInstruments.size() << '\n';
+        for (const auto& instr : mInstruments) WriteInstrument(out, *instr);
+        out.close();
+
+        if (!out || !MoveFileExW(temporary, target.c_str(), MOVEFILE_REPLACE_EXISTING)) {
+            throw runtime_error(Locale::get().msg_file_write_failed);
+        }
+    } catch (...) {
+        DeleteFileW(temporary);
+        throw;
+    }
 }
 
-// Загрузка инструментов из файла
-void InstrumentStore::LoadFromFile(const string& filename) {
+void InstrumentStore::LoadFromFile(const filesystem::path& filename) {
     ifstream in(filename);
-    if (!in) return;
+    if (!in) throw runtime_error(Locale::get().msg_file_open_failed);
 
-    Clear();
-    size_t total;
-    in >> total;
-    in.ignore();
+    string header = ReadField(in);
+    StripBom(header);
+    const int total = ParseNumber<int>(header);
+    if (total > mCapacity) throw runtime_error(Locale::get().msg_store_full);
 
-    for (size_t i = 0; i < total; ++i) {
-        string tag, brend, group, material;
-        int count;
-
-        getline(in, tag);
-        getline(in, brend);
-        in >> count; in.ignore();
-        getline(in, group);
-        getline(in, material);
-
-        StringInstruments* obj = nullptr;
-
-        if (tag == TAG_ACOUSTIC) {
-            string cKant, cKorpus, mGrif, mStr;
-            float size;
-            getline(in, cKant);
-            in >> size; in.ignore();
-            getline(in, cKorpus);
-            getline(in, mGrif);
-            getline(in, mStr);
-            obj = new AcousticGuitar(brend, count, group, material,
-                cKant, size, cKorpus, mGrif, mStr);
-        }
-        else if (tag == TAG_BASS) {
-            float power, battery;
-            int strings;
-            in >> power >> battery >> strings; in.ignore();
-            obj = new BassGuitar(brend, count, group, material,
-                power, battery, strings);
-        }
-        else if (tag == TAG_ELECTRIC) {
-            float power, battery;
-            int pickups;
-            in >> power >> battery >> pickups; in.ignore();
-            obj = new ElectricGuitar(brend, count, group, material,
-                power, battery, pickups);
-        }
-        else {
-            obj = new StringInstruments(brend, count, group, material);
-        }
-
-        if (obj) AddInstrument(obj);
+    InstrumentStore loaded(mCapacity);
+    for (int i = 0; i < total; ++i) {
+        vector<string> fields{ReadField(in)};
+        const auto size = FieldCount(fields.front());
+        while (fields.size() < size) fields.push_back(ReadField(in));
+        // Старый интерфейс позволял создать повторяющиеся марки переименованием.
+        // При восстановлении каталога сохраняем все ранее записанные позиции.
+        loaded.mInstruments.push_back(ParseInstrument(fields));
     }
+    string line;
+    while (getline(in, line)) {
+        if (!IsBlank(line)) throw runtime_error(Locale::get().msg_invalid_data);
+    }
+    if (!in.eof() || in.bad()) throw runtime_error(Locale::get().msg_invalid_data);
+    mInstruments.swap(loaded.mInstruments);
 }
 
-// Поиск инструмента по бренду
+int InstrumentStore::LoadDefaults(const filesystem::path& filename) {
+    ifstream in(filename);
+    if (!in) throw runtime_error(Locale::get().msg_file_open_failed);
+
+    InstrumentStore loaded(mCapacity);
+    string line;
+    bool firstLine = true;
+    while (loaded.GetCount() < mCapacity && getline(in, line)) {
+        if (firstLine) StripBom(line);
+        firstLine = false;
+        if (line.empty() || line.front() == '#') continue;
+
+        vector<string> fields;
+        size_t start = 0;
+        for (size_t separator = line.find(';'); separator != string::npos;
+             separator = line.find(';', start)) {
+            fields.push_back(line.substr(start, separator - start));
+            start = separator + 1;
+        }
+        fields.push_back(line.substr(start));
+        if (fields[0] == "A") fields[0] = "ACOUSTIC";
+        else if (fields[0] == "B") fields[0] = "BASS";
+        else if (fields[0] == "E") fields[0] = "ELECTRIC";
+        else continue;
+
+        try {
+            auto instrument = ParseInstrument(fields);
+            if (!loaded.HasDuplicate(*instrument, instrument->GetBrend())) {
+                loaded.mInstruments.push_back(move(instrument));
+            }
+        } catch (const invalid_argument&) {
+            // Файл автозаполнения может содержать отдельные ошибочные строки.
+        }
+    }
+    if (in.bad() || loaded.mInstruments.empty()) {
+        throw runtime_error(Locale::get().msg_invalid_data);
+    }
+    mInstruments.swap(loaded.mInstruments);
+    return GetCount();
+}
+
 StringInstruments* InstrumentStore::FindByBrend(const string& brand) const {
-    for (auto* instr : mInstruments)
-        if (instr->GetBrend() == brand) return instr;
+    for (const auto& instr : mInstruments) {
+        if (instr->GetBrend() == brand) return instr.get();
+    }
     return nullptr;
 }
 
-// Очистка всех инструментов с освобождением памяти
 void InstrumentStore::Clear() {
-    for (auto* instr : mInstruments) delete instr;
     mInstruments.clear();
 }

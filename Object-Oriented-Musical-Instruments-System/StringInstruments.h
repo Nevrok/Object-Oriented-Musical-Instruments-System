@@ -14,6 +14,8 @@ protected:
 public:
     StringInstruments();
     StringInstruments(string brend, int count, string group, string material);
+    StringInstruments(const StringInstruments& other);
+    StringInstruments& operator=(const StringInstruments&) = default;
     virtual ~StringInstruments();
 
     // Геттеры

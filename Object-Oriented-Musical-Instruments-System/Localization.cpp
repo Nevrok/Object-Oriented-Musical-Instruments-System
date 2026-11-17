@@ -150,9 +150,15 @@ void Locale::init() {
 
     r.menu_fill_from_data_file = "F. Автозаполнение из файла данных";
     r.msg_only_digits = "Ошибка: Введите только цифры!";
-    r.msg_only_letters = "Ошибка: Введите только буквы!";
+    r.msg_only_letters = "Ошибка: используйте буквы и допустимые знаки.";
     r.msg_loaded_instruments = "Загружено инструментов: ";
     r.msg_data_file_missing = "Файл данных не найден или пуст!";
+    r.msg_duplicate = "Инструмент этого типа с такой маркой уже есть.";
+    r.msg_invalid_data = "Файл содержит некорректные данные.";
+    r.msg_file_open_failed = "Не удалось открыть файл.";
+    r.msg_file_write_failed = "Не удалось записать файл.";
+    r.msg_sound_missing = "Звуковой файл не найден: ";
+    r.msg_range_to = " до ";
 
     r.prompt_group = "Группа инструмента: ";
     r.prompt_rim_color = "Цвет канта: ";
@@ -355,9 +361,15 @@ void Locale::init() {
 
     e.menu_fill_from_data_file = "F. Auto—fill from data file";
     e.msg_only_digits = "Error: Enter digits only!";
-    e.msg_only_letters = "Error: Enter letters only!";
+    e.msg_only_letters = "Error: use letters and allowed punctuation.";
     e.msg_loaded_instruments = "Loaded instruments: ";
     e.msg_data_file_missing = "Data file not found or empty!";
+    e.msg_duplicate = "An instrument of this type and brand already exists.";
+    e.msg_invalid_data = "The file contains invalid data.";
+    e.msg_file_open_failed = "Could not open the file.";
+    e.msg_file_write_failed = "Could not write the file.";
+    e.msg_sound_missing = "Sound file not found: ";
+    e.msg_range_to = " to ";
 
     e.prompt_group = "Instrument group: ";
     e.prompt_rim_color = "Rim color: ";

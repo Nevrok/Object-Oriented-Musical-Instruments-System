@@ -1,19 +1,21 @@
 #pragma once
+#include <memory>
 #include <string>
 #include <vector>
 #include "StringInstruments.h"
 using namespace std;
 
+class InstrumentStore;
+
 class Customer {
 private:
     string mName;
     int    mAge;
-    vector<StringInstruments*> mInventory;  // Инвентарь покупателя
+    vector<unique_ptr<StringInstruments>> mInventory;  // Инвентарь покупателя
 
 public:
     Customer();
     Customer(string name, int age);
-    ~Customer();
 
     string GetName() const { return mName; }
     int    GetAge()  const { return mAge; }
@@ -22,7 +24,7 @@ public:
     void SetName(const string& v);
     void SetAge(int v);
 
-    void BuyInstrument(StringInstruments* instr);  // Добавить в инвентарь
+    bool BuyInstrument(InstrumentStore& store, int index);
     StringInstruments* GetInventoryItem(int index) const;  // Получить инструмент из инвентаря
     void PrintInventory() const;  // Показать весь инвентарь
     void ShowInstrumentInfo(const StringInstruments& instr) const;

@@ -70,6 +70,11 @@
     <Import Project="$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props" Condition="exists('$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props')" Label="LocalAppDataPlatform" />
   </ImportGroup>
   <PropertyGroup Label="UserMacros" />
+  <ItemDefinitionGroup>
+    <ClCompile>
+      <AdditionalOptions>/utf-8 %(AdditionalOptions)</AdditionalOptions>
+    </ClCompile>
+  </ItemDefinitionGroup>
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'">
     <ClCompile>
       <WarningLevel>Level3</WarningLevel>
@@ -147,6 +152,7 @@
     <ClCompile Include="InstrumentStore.cpp" />
     <ClCompile Include="Localization.cpp" />
     <ClCompile Include="main.cpp" />
+    <ClCompile Include="SoundPlayer.cpp" />
     <ClCompile Include="StringInstruments.cpp" />
   </ItemGroup>
   <ItemGroup>
@@ -157,6 +163,8 @@
     <ClInclude Include="ElectronicDevice.h" />
     <ClInclude Include="InstrumentStore.h" />
     <ClInclude Include="Localization.h" />
+    <ClInclude Include="RuntimeFiles.h" />
+    <ClInclude Include="SoundPlayer.h" />
     <ClInclude Include="StringInstruments.h" />
   </ItemGroup>
   <ItemGroup>
@@ -166,7 +174,13 @@
   <ItemGroup>
     <None Include="README.md" />
   </ItemGroup>
+  <ItemGroup>
+    <BundledFile Include="instruments_data.txt;acousticguitarsound.mp3;bassguitarsound.mp3;brokestringsound.mp3;electricguitarsound.mp3" />
+  </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
+  <Target Name="CopyBundledFiles" AfterTargets="Build">
+    <Copy SourceFiles="@(BundledFile)" DestinationFolder="$(OutDir)" SkipUnchangedFiles="true" />
+  </Target>
   <ImportGroup Label="ExtensionTargets">
   </ImportGroup>
 </Project>

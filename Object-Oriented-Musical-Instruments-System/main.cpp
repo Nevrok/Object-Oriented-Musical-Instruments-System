@@ -1,18 +1,19 @@
-#define NOMINMAX    
+#define NOMINMAX
 #define WIN32_LEAN_AND_MEAN
 #include <iostream>
 #include <iomanip>
 #include <string>
 #include <limits>
-#include <fstream>
-#include <sstream>
+#include <charconv>
+#include <memory>
+#include <optional>
 #include <vector>
 #include <conio.h>
 #include <windows.h>
 #include <stdexcept>
-#include <cctype>
 
 #include "Localization.h"
+#include "RuntimeFiles.h"
 #include "StringInstruments.h"
 #include "AcousticGuitar.h"
 #include "BassGuitar.h"
@@ -38,180 +39,77 @@ static void frameHint() {
     cout << Locale::get().frame_hint << "\n\n";
 }
 
-static bool isBackspaceKey(int ch) {
-    return ch == 8;
-}
-
-static string getExeDir() {
-    char buf[MAX_PATH] = { 0 };
-    DWORD len = GetModuleFileNameA(nullptr, buf, MAX_PATH);
-    if (len == 0 || len >= MAX_PATH) return "";
-    string full(buf, len);
-    size_t pos = full.find_last_of("\\/");
-    if (pos == string::npos) return "";
-    return full.substr(0, pos + 1);
-}
-
-// Проверка: строка содержит только буквы, пробелы и дефисы
-static bool isAlphaOnly(const string& s) {
-    if (s.empty()) return false;
-    for (unsigned char c : s) {
-        // Пропускаем UTF—8 продолжающие байты, чтобы кириллица не ломала проверку по байтам
-        if ((c & 0xC0) == 0x80) continue;
-        if (c >= 0x80) continue;
-        if (!isalpha(c) && !isdigit(c) && c != ' ' && c != '—' && c != '.') return false;
+static bool isName(const wstring& text, bool allowDigits) {
+    bool hasContent = false;
+    for (wchar_t ch : text) {
+        WORD classification = 0;
+        GetStringTypeW(CT_CTYPE1, &ch, 1, &classification);
+        if ((classification & C1_ALPHA) || (allowDigits && (classification & C1_DIGIT))) {
+            hasContent = true;
+        } else if (ch != L' ' && ch != L'-' && ch != L'—' && ch != L'.' && ch != L'\'') {
+            return false;
+        }
     }
-    return true;
+    return hasContent;
 }
 
-// Проверка: строка содержит только цифры (для числовых полей)
-static bool isDigitsOnly(const string& s) {
-    if (s.empty()) return false;
-    for (char c : s) {
-        if (!isdigit(static_cast<unsigned char>(c))) return false;
-    }
-    return true;
-}
-
-static string inputLineEsc(const string& prompt, bool allowEmpty = false) {
-    cout << prompt;
-    string s;
+static optional<wstring> inputLineEsc(const string& prompt) {
+    cout << prompt << flush;
+    wstring line;
     while (true) {
-        int ch = _getch();
-
-        if (ch == 27) {
-            return "";
-        }
-
-        if (ch == '\r') {
-            cout << "\n";
-            if (!allowEmpty && s.empty()) {
-                cout << Locale::get().msg_invalid << "\n";
-                cout << prompt;
-                continue;
-            }
-            if (s.length() > 100) {
-                cout << Locale::get().masg_over_text_limit << "\n";
-                s.clear();
-                cout << prompt;
-                continue;
-            }
-            return s;
-        }
-
-        if (isBackspaceKey(ch)) {
-            if (!s.empty()) {
-                s.pop_back();
-                cout << "\b \b";
-            }
-            continue;
-        }
-
-        if (isprint(static_cast<unsigned char>(ch))) {
-            s.push_back(static_cast<char>(ch));
-            cout << static_cast<char>(ch);
+        const wint_t ch = _getwch();
+        if (ch == 0 || ch == 0xe0) {
+            _getwch(); // Пропускаем код функциональной клавиши.
+        } else if (ch == 27 || ch == WEOF) {
+            cout << '\n';
+            return nullopt;
+        } else if (ch == L'\r') {
+            cout << '\n';
+            if (!line.empty() && line.size() <= 100) return line;
+            const auto& t = Locale::get();
+            cout << (line.empty() ? t.msg_invalid : t.masg_over_text_limit) << '\n'
+                 << prompt << flush;
+            line.clear();
+        } else if (ch == L'\b' && !line.empty()) {
+            line.pop_back();
+            cout << "\b \b" << flush;
+        } else if (ch >= L' ' && ch != 127) {
+            line.push_back(static_cast<wchar_t>(ch));
+            cout << toUtf8(wstring_view(&line.back(), 1)) << flush;
         }
     }
 }
 
-static bool readIntFromLine(const string& s, int& out) {
-    try {
-        size_t pos = 0;
-        long long v = stoll(s, &pos);
-        if (pos != s.size()) return false;
-        out = static_cast<int>(v);
-        return true;
-    }
-    catch (...) {
-        return false;
-    }
+static bool readIntFromLine(const string& line, int& value) {
+    const char* end = line.data() + line.size();
+    const auto result = from_chars(line.data(), end, value);
+    return result.ec == errc{} && result.ptr == end;
 }
 
 static int inputIntEsc(const string& prompt, int minVal = 0, int maxVal = 1000) {
-    while (true) {
-        string s = inputLineEsc(prompt, true);
-        if (s.empty()) return -1;
-
-        if (!isDigitsOnly(s)) {
-            cout << Locale::get().msg_only_digits << "\n";
+    while (auto line = inputLineEsc(prompt)) {
+        const auto& t = Locale::get();
+        if (line->find_first_not_of(L"0123456789") != wstring::npos) {
+            cout << t.msg_only_digits << '\n';
             continue;
         }
 
-        int v = 0;
-        if (!readIntFromLine(s, v)) {
-            cout << Locale::get().msg_invalid << "\n";
+        int value;
+        if (!readIntFromLine(toUtf8(*line), value) || value < minVal || value > maxVal) {
+            cout << t.msg_range_error_prefix << minVal << t.msg_range_to << maxVal << "!\n";
             continue;
         }
-        if (v < minVal || v > maxVal) {
-            cout << Locale::get().msg_range_error_prefix << minVal << " до " << maxVal << "!\n";
-            continue;
-        }
-        return v;
+        return value;
     }
+    return -1;
 }
 
-// Ввод строки с проверкой на буквы (для названий, брендов, материалов)
-static string inputAlphaEsc(const string& prompt) {
-    while (true) {
-        string s = inputLineEsc(prompt, true);
-        if (s.empty()) return "";
-
-        if (!isAlphaOnly(s)) {
-            cout << Locale::get().msg_only_letters << "\n";
-            continue;
-        }
-        return s;
+static string inputAlphaEsc(const string& prompt, bool allowDigits = true) {
+    while (auto line = inputLineEsc(prompt)) {
+        if (isName(*line, allowDigits)) return toUtf8(*line);
+        cout << Locale::get().msg_only_letters << '\n';
     }
-}
-
-// Ввод материала
-static string inputMaterialEsc(const string& prompt) {
-    while (true) {
-        string s = inputAlphaEsc(prompt);
-        if (s.empty()) return "";
-        for (unsigned char c : s) {
-            if (isdigit(c)) {
-                cout << Locale::get().msg_only_letters << "\n";
-                s.clear();
-                break;
-            }
-        }
-        if (!s.empty()) return s;
-    }
-}
-
-
-// Ввод целого числа с проверкой на диапазон
-static int inputInt(const string& prompt, int minVal = 0, int maxVal = 1000) {
-    cout << prompt;
-    int v = -1;
-    try {
-        cin >> v;
-        if (cin.fail()) {
-            cin.clear();
-            cin.ignore((numeric_limits<streamsize>::max)(), '\n');
-            cout << Locale::get().msg_invalid << "\n";
-            return -1;
-        }
-        cin.ignore((numeric_limits<streamsize>::max)(), '\n');
-        // Проверка на отрицательное значение
-        if (v < 0) {
-            cout << Locale::get().msg_invalid << "\n";
-            return -1;
-        }
-        // Проверка на диапазон
-        if (v < minVal || v > maxVal) {
-            cout << Locale::get().msg_range_error_prefix << minVal << " до " << maxVal << "!\n";
-            return -1;
-        }
-    }
-    catch (const exception& e) {
-        cout << Locale::get().msg_input_number_error_prefix << e.what() << "\n";
-        cin.clear();
-        cin.ignore((numeric_limits<streamsize>::max)(), '\n');
-        return -1;
-    }
-    return v;
+    return {};
 }
 
 static int visualLen(const string& s) {
@@ -249,86 +147,6 @@ static void countByType(int& ac, int& el, int& bs) {
         else if (dynamic_cast<ElectricGuitar*>(p)) el++;
         else if (dynamic_cast<BassGuitar*>(p)) bs++;
     }
-}
-
-// Разбиение строки по разделителю
-static vector<string> split(const string& s, char delim) {
-    vector<string> tokens;
-    stringstream ss(s);
-    string item;
-    while (getline(ss, item, delim)) {
-        tokens.push_back(item);
-    }
-    return tokens;
-}
-
-// Загрузка инструментов из файла данных
-static int loadFromFile(const string& filename) {
-    string exeDir = getExeDir();
-    ifstream file(exeDir + filename);
-    if (!file.is_open()) file.open(filename);
-    if (!file.is_open()) return 0;
-
-    int count = 0;
-    string line;
-
-    // Формат строк: Type;... (Type = A/E/B), остальное зависит от типа.
-    while (getline(file, line)) {
-        if (line.empty() || line[0] == '#') continue;
-
-        vector<string> parts = split(line, ';');
-        if (parts.empty()) continue;
-
-        char type = parts[0][0];
-
-        try {
-            if (type == 'A' && parts.size() >= 10) {
-                // Acoustic: A;бренд;струны;группа;материал;цвет канта;размер;цвет корпуса;материал грифа;материал струн
-                globalStore.AddInstrument(new AcousticGuitar(
-                    parts[1],
-                    stoi(parts[2]),
-                    parts[3],
-                    parts[4],
-                    parts[5],
-                    stof(parts[6]),
-                    parts[7],
-                    parts[8],
-                    parts[9]));
-                count++;
-            }
-            else if (type == 'E' && parts.size() >= 8) {
-                // Electric: E;бренд;струны;группа;материал;мощность;батарея;звукосниматели
-                globalStore.AddInstrument(new ElectricGuitar(
-                    parts[1],
-                    stoi(parts[2]),
-                    parts[3],
-                    parts[4],
-                    stof(parts[5]),
-                    stof(parts[6]),
-                    stoi(parts[7])));
-                count++;
-            }
-            else if (type == 'B' && parts.size() >= 8) {
-                // Bass: B;бренд;count;группа;материал;мощность;батарея;струны
-                globalStore.AddInstrument(new BassGuitar(
-                    parts[1],
-                    stoi(parts[2]),
-                    parts[3],
-                    parts[4],
-                    stof(parts[5]),
-                    stof(parts[6]),
-                    stoi(parts[7])));
-                count++;
-            }
-        }
-        catch (...) {
-            // Пропускаем строки с ошибками
-            continue;
-        }
-    }
-
-    file.close();
-    return count;
 }
 
 //  Управление одним инструментом
@@ -383,34 +201,24 @@ static void manageInstrument(StringInstruments* instr) {
             break;
         }
         case '3': if (elec) elec->Charge(); break;
-        case '4': {
-            AcousticGuitar* ag = dynamic_cast<AcousticGuitar*>(instr);
-            if (ag && ag->GetCount() <= 0) {
-                cout << t2.msg_invalid << t2.msg_no_strings << "\n";
-                break;
-            }
-            if (!instr) {
-                cout << Locale::get().msg_invalid << " nullptr\n";
-                break;
-            }
+        case '4':
             instr->Print();
-            cout << t2.separator << "\n";
+            cout << t2.separator << '\n';
+            break;
+        case '5': {
+            auto* bass = dynamic_cast<BassGuitar*>(instr);
+            if ((bass ? bass->GetStringCount() : instr->GetCount()) == 0) {
+                cout << t2.msg_invalid << t2.msg_no_strings << '\n';
+            } else {
+                instr->Tune();
+            }
             break;
         }
-        case '5': {
-            AcousticGuitar* ag = dynamic_cast<AcousticGuitar*>(instr);
-            if (ag && ag->GetCount() <= 0) {
-                cout << t2.msg_invalid << t2.msg_no_strings << "\n";
-                break;
+        case '6': {
+            string brand = inputAlphaEsc(t2.msg_enter_brand);
+            if (!brand.empty() && globalStore.RenameInstrument(*instr, brand)) {
+                cout << t2.lbl_brand << instr->GetBrend() << '\n';
             }
-            if (!instr) {
-                cout << Locale::get().msg_invalid << " nullptr\n";
-                break;
-            }
-            string nb = inputAlphaEsc(t2.msg_enter_brand);
-            if (nb.empty()) break;
-            instr->SetBrend(nb);
-            cout << t2.lbl_brand << instr->GetBrend() << "\n";
             break;
         }
         case '7': {
@@ -420,10 +228,17 @@ static void manageInstrument(StringInstruments* instr) {
             // — Для BassGuitar свой счётчик струн (mStringCount)
             cout << t2.act_add_remove_string;
             int s = _getch();
+            if (s == 9) { Locale::toggle(); continue; }
+            if (s == 27) continue;
             if (s == '1') {
                 BassGuitar* bg = dynamic_cast<BassGuitar*>(instr);
-                if (bg) { bg->SetStringCount(bg->GetStringCount() + 1); }
-                else { ++(*instr); }
+                if (bg) {
+                    if (bg->GetStringCount() < numeric_limits<int>::max()) {
+                        bg->SetStringCount(bg->GetStringCount() + 1);
+                    }
+                } else {
+                    ++(*instr);
+                }
             }
             else if (s == '2') {
                 AcousticGuitar* ag = dynamic_cast<AcousticGuitar*>(instr);
@@ -440,6 +255,9 @@ static void manageInstrument(StringInstruments* instr) {
                 }
                 else if (eg) { --(*eg); }
                 else if (bg) { bg->DecreaseStringCount(); }
+            } else {
+                cout << t2.msg_invalid << '\n';
+                break;
             }
             BassGuitar* bg2 = dynamic_cast<BassGuitar*>(instr);
             if (bg2) cout << t2.act_str_operation << bg2->GetStringCount() << "\n";
@@ -450,6 +268,8 @@ static void manageInstrument(StringInstruments* instr) {
             if (elec) {
                 cout << t2.act_electronics_menu;
                 int b = _getch();
+                if (b == 9) { Locale::toggle(); continue; }
+                if (b == 27) continue;
                 if (b == '1') {
                     ElectricGuitar* eg = dynamic_cast<ElectricGuitar*>(instr);
                     BassGuitar* bg = dynamic_cast<BassGuitar*>(instr);
@@ -466,13 +286,13 @@ static void manageInstrument(StringInstruments* instr) {
                     }
                 }
                 else if (b == '2') {
-                    --(*elec); // Использование виртуального оператора ElectronicDevice
+                    --(*elec); // Расход заряда через оператор ElectronicDevice
                     cout << t2.act_spent_10 << elec->GetBattery() << "%\n";
                 }
                 else if (b == '3') {
                     int pw = inputIntEsc(t2.act_enter_power, 1, 1000); // Мощность от 1 до 1000
                     if (pw < 0) break;
-                    if (pw > 0) { elec->SetPower(pw); cout << t2.act_power_set << pw << "\n"; }
+                    if (pw > 0) { elec->SetPower(static_cast<float>(pw)); cout << t2.act_power_set << pw << "\n"; }
                 }
                 else if (b == '4') {
                     // Новый пункт: сравнение мощности с другим инструментом
@@ -545,11 +365,27 @@ static void addInstrumentMenu() {
         cls(); frameHint();
         const auto& t2 = Locale::get();
 
+        if (key < '1' || key > '3') {
+            cout << t2.msg_invalid << '\n';
+            pause();
+            continue;
+        }
+
+        cout << (key == '1' ? t2.act_add_modes_title : t2.act_add_modes_short);
+        int mode = _getch();
+        cout << '\n';
+        if (mode == 9) { Locale::toggle(); continue; }
+        if (mode == 27) continue;
+        if (mode != '1' && mode != '2') {
+            cout << t2.msg_invalid << '\n';
+            pause();
+            continue;
+        }
+
+        string br = inputAlphaEsc(t2.msg_enter_brand);
+        if (br.empty()) continue;
+        unique_ptr<StringInstruments> instrument;
         if (key == '1') {
-            cout << t2.act_add_modes_title;
-            int mode = _getch(); cout << "\n";
-            string br = inputAlphaEsc(t2.msg_enter_brand);
-            if (br.empty()) break;
 
             // В режиме "2" пользователь вводит все поля вручную
             // В режиме "1" подставляется шаблон
@@ -559,7 +395,7 @@ static void addInstrumentMenu() {
                 if (strings < 0) break;
                 string group = inputAlphaEsc(t2.prompt_group);
                 if (group.empty()) break;
-                string material = inputMaterialEsc(t2.act_enter_material);
+                string material = inputAlphaEsc(t2.act_enter_material, false);
                 if (material.empty()) break;
                 string cKant = inputAlphaEsc(t2.prompt_rim_color);
                 if (cKant.empty()) break;
@@ -573,28 +409,23 @@ static void addInstrumentMenu() {
                 string mString = inputAlphaEsc(t2.prompt_string_material);
                 if (mString.empty()) break;
 
-                globalStore.AddInstrument(new AcousticGuitar(
-                    br, strings, group, material, cKant, size, cKorpus, mGrif, mString));
+                instrument = make_unique<AcousticGuitar>(
+                    br, strings, group, material, cKant, size, cKorpus, mGrif, mString);
             }
             else {
-                globalStore.AddInstrument(new AcousticGuitar(
-                    br, 6, "Acoustic", "Spruce", "Ivory", 41.0f, "Natural", "Maple", "Nylon"));
+                instrument = make_unique<AcousticGuitar>(
+                    br, 6, "Acoustic", "Spruce", "Ivory", 41.0f, "Natural", "Maple", "Nylon");
             }
 
-            cout << t2.msg_added << "\n"; running = false;
         }
         else if (key == '2') {
-            cout << t2.act_add_modes_short;
-            int mode = _getch(); cout << "\n";
-            string br = inputAlphaEsc(t2.msg_enter_brand);
-            if (br.empty()) break;
 
             if (mode == '2') {
                 int strings = inputIntEsc(t2.msg_enter_strings, 1, 12);
                 if (strings < 0) break;
                 string group = inputAlphaEsc(t2.prompt_group);
                 if (group.empty()) break;
-                string material = inputMaterialEsc(t2.act_enter_material);
+                string material = inputAlphaEsc(t2.act_enter_material, false);
                 if (material.empty()) break;
                 int powerI = inputIntEsc(t2.act_enter_power_w, 1, 1000);
                 if (powerI < 0) break;
@@ -603,29 +434,24 @@ static void addInstrumentMenu() {
                 int pickups = inputIntEsc(t2.prompt_pickup_count, 0, 10);
                 if (pickups < 0) break;
 
-                globalStore.AddInstrument(new ElectricGuitar(
+                instrument = make_unique<ElectricGuitar>(
                     br, strings, group, material,
-                    static_cast<float>(powerI), static_cast<float>(batteryI), pickups));
+                    static_cast<float>(powerI), static_cast<float>(batteryI), pickups);
             }
             else {
-                globalStore.AddInstrument(new ElectricGuitar(
-                    br, 6, "Electric", "Mahogany", 100.0f, 100.0f, 2));
+                instrument = make_unique<ElectricGuitar>(
+                    br, 6, "Electric", "Mahogany", 100.0f, 100.0f, 2);
             }
 
-            cout << t2.msg_added << "\n"; running = false;
         }
         else if (key == '3') {
-            cout << t2.act_add_modes_short;
-            int mode = _getch(); cout << "\n";
-            string br = inputAlphaEsc(t2.msg_enter_brand);
-            if (br.empty()) break;
 
             if (mode == '2') {
                 int count = inputIntEsc(t2.prompt_quantity_count, 0, 1000);
                 if (count < 0) break;
                 string group = inputAlphaEsc(t2.prompt_group);
                 if (group.empty()) break;
-                string material = inputMaterialEsc(t2.act_enter_material);
+                string material = inputAlphaEsc(t2.act_enter_material, false);
                 if (material.empty()) break;
                 int powerI = inputIntEsc(t2.act_enter_power_w, 1, 1000);
                 if (powerI < 0) break;
@@ -634,19 +460,19 @@ static void addInstrumentMenu() {
                 int strings = inputIntEsc(t2.msg_enter_strings, 1, 12);
                 if (strings < 0) break;
 
-                globalStore.AddInstrument(new BassGuitar(
+                instrument = make_unique<BassGuitar>(
                     br, count, group, material,
-                    static_cast<float>(powerI), static_cast<float>(batteryI), strings));
+                    static_cast<float>(powerI), static_cast<float>(batteryI), strings);
             }
             else {
-                globalStore.AddInstrument(new BassGuitar(
-                    br, 1, "Bass", "Alder", 50.0f, 100.0f, 4));
+                instrument = make_unique<BassGuitar>(
+                    br, 1, "Bass", "Alder", 50.0f, 100.0f, 4);
             }
 
-            cout << t2.msg_added << "\n"; running = false;
         }
-        else {
-            cout << t2.msg_invalid << "\n";
+        if (globalStore.AddInstrument(move(instrument))) {
+            cout << t2.msg_added << '\n';
+            running = false;
         }
         pause();
     }
@@ -685,11 +511,8 @@ static void customerMenu() {
             globalStore.PrintAll();
             int idx = inputIntEsc(t2.lbl_index, 1, globalStore.GetCount());
             if (idx < 0) { pause(); continue; }
-            StringInstruments* item = globalStore.GetAt(idx - 1);
-            if (item) {
-                currentCustomer.BuyInstrument(item);
-                globalStore.RemoveInstrument(idx - 1);
-                cout << t2.msg_sold_one << "\n";
+            if (currentCustomer.BuyInstrument(globalStore, idx - 1)) {
+                cout << t2.msg_sold_one << '\n';
             }
         }
         else if (key == '2') {
@@ -758,9 +581,6 @@ static void searchMenu() {
         cout << t.separator << "\n";
         found->Print();
         cout << t.separator << "\n";
-        AcousticGuitar* ag = dynamic_cast<AcousticGuitar*>(found);
-        if (ag)
-            cout << "operator==() : " << ((*ag == *ag) ? "true (одинаковые)" : "false (разные)") << "\n";
     }
     else {
         cout << t.msg_not_found << "\n";
@@ -819,24 +639,18 @@ static void storeMenu() {
             cout << "\n"; globalStore.Clear();
             cout << t2.msg_sold_all << "\n"; pause(); break;
         case '4': {
-            cout << "\n";
-            try {
-                if (globalStore.GetCount() == 0) { cout << t2.msg_store_empty << "\n"; pause(); break; }
+            cout << '\n';
+            if (globalStore.GetCount() == 0) {
+                cout << t2.msg_store_empty << '\n';
+            } else {
                 globalStore.PrintAll();
-                int idx = inputInt(t2.lbl_index);
-                if (idx < 1 || idx > globalStore.GetCount()) {
-                    throw out_of_range(Locale::get().msg_index_out_of_range);
-                }
+                int idx = inputIntEsc(t2.lbl_index, 1, globalStore.GetCount());
+                if (idx < 0) break;
                 globalStore.RemoveInstrument(idx - 1);
-                cout << t2.msg_sold_one << "\n";
+                cout << t2.msg_sold_one << '\n';
             }
-            catch (const out_of_range& e) {
-                cout << t2.msg_invalid << " " << e.what() << "\n";
-            }
-            catch (const exception& e) {
-                cout << t2.msg_invalid << " " << e.what() << "\n";
-            }
-            pause(); break;
+            pause();
+            break;
         }
         case '5':
             cout << "\n";
@@ -867,14 +681,8 @@ static void storeMenu() {
             // Автозаполнение из файла данных
             cout << "\n";
             try {
-                globalStore.Clear();
-                int loaded = loadFromFile("instruments_data.txt");
-                if (loaded > 0) {
-                    cout << Locale::get().msg_loaded_instruments << loaded << "\n";
-                }
-                else {
-                    cout << Locale::get().msg_data_file_missing << "\n";
-                }
+                int loaded = globalStore.LoadDefaults(findBundledFile("instruments_data.txt"));
+                cout << t2.msg_loaded_instruments << loaded << '\n';
             }
             catch (const exception& e) {
                 cout << Locale::get().msg_error_load_prefix << e.what() << "\n";

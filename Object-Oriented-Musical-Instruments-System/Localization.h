@@ -164,6 +164,12 @@ struct TextResources {
     string msg_only_letters;
     string msg_loaded_instruments;
     string msg_data_file_missing;
+    string msg_duplicate;
+    string msg_invalid_data;
+    string msg_file_open_failed;
+    string msg_file_write_failed;
+    string msg_sound_missing;
+    string msg_range_to;
 
     // Приглашения ручного ввода
     string prompt_group;

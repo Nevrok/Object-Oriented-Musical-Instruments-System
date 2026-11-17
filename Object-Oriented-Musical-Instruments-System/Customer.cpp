@@ -1,4 +1,5 @@
 #include "Customer.h"
+#include "InstrumentStore.h"
 #include "Localization.h"
 #include <iostream>
 #include <stdexcept>
@@ -7,14 +8,6 @@ using namespace std;
 Customer::Customer() : mName("Guest"), mAge(18) {}
 
 Customer::Customer(string name, int age) : mName(name), mAge(age) {}
-
-Customer::~Customer() {
-    // Освобождаем память, выделенную для инструментов в инвентаре
-    for (auto* instr : mInventory) {
-        delete instr;
-    }
-    mInventory.clear();
-}
 
 void Customer::SetName(const string& v) {
     try {
@@ -39,22 +32,21 @@ void Customer::SetAge(int v) {
         cout << Locale::get().msg_invalid << " " << e.what() << "\n";
     }
 }
-void Customer::BuyInstrument(StringInstruments* instr) {
-    const auto& t = Locale::get();
-    if (!instr) return;
+bool Customer::BuyInstrument(InstrumentStore& store, int index) {
+    if (!store.GetAt(index)) return false;
+    // Выделяем место до передачи владения, чтобы покупка не терялась при ошибке.
+    mInventory.emplace_back();
+    mInventory.back() = store.TakeInstrument(index);
 
-    // Создаем копию инструмента для инвентаря
-    StringInstruments* copy = new StringInstruments(*instr);
-    mInventory.push_back(copy);
-
-    cout << mName << t.msg_customer_buy
-        << "[" << instr->GetBrend() << "] "
-        << instr->GetTypeName() << endl;
+    const auto& instr = *mInventory.back();
+    cout << mName << Locale::get().msg_customer_buy
+        << "[" << instr.GetBrend() << "] " << instr.GetTypeName() << endl;
+    return true;
 }
 
 StringInstruments* Customer::GetInventoryItem(int index) const {
     if (index >= 0 && index < (int)mInventory.size())
-        return mInventory[index];
+        return mInventory[index].get();
     return nullptr;
 }
 
